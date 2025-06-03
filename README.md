@@ -13,3 +13,7 @@ Dopodichè eseguire
 ```bash
 conda activate fns 
 ```
+
+## utils
+
+[Coding Stable Diffusion from scratch](https://www.youtube.com/watch?v=ZBKpAp_6TGI&t=157s&ab_channel=UmarJamil)
