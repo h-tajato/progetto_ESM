@@ -1,43 +1,25 @@
-# main.py
-
-from diffusers import StableDiffusionPipeline
+from auffusion import AuffusionGuidance
+import matplotlib.pyplot as plt
 import torch
-from PIL import Image
-import latent_space_utils as lu
 
-def main():
-    device = "cuda"
-    prompt_image = "a cat"
-    prompt_audio = "a meowing cat"
 
-    # Load models
-    print("Loading pipelines...")
-    sd_pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", torch_dtype=torch.float32).to(device)
+if __name__ == '__main__':
+    model = AuffusionGuidance(fp16=False)
+    model = model.to(torch.device('cpu'))
+    prompt_audio = 'a meowing cat'
+    prompt_video = 'a painting of a cat, grayscale'
+    spect = model.prompt_to_spec(prompt_audio, prompt_video, height=256, width=1024, num_inference_steps=10, device=torch.device('cpu'))
 
-    # Text encodings
-    emb_image = lu.encode_text(prompt_image, sd_pipe, device)
-    au_pipe = StableDiffusionPipeline.from_pretrained("auffusion/auffusion-full-no-adapter", torch_dtype=torch.float32).to(device)
-    
-    emb_audio = lu.encode_text(prompt_audio, au_pipe, device)
+    print(torch.mean(spect), torch.min(spect), torch.max(spect))
+    img = spect.detach().cpu().squeeze(0) 
+    img = img.permute(1, 2, 0).numpy()
+    # img = img.astype("16")
+    img = img.clip(0, 1)
+    # print(img.shape, type(img))
+    # gray = 0.2989 * img[0] + 0.5870 * img[1] + 0.1140 * img[2]
 
-    # Init and noise
-    latents = lu.init_latents(sd_pipe, device=device)
-    z_t, _ = lu.add_noise(sd_pipe, latents, steps=100)
+    plt.figure()
+    plt.imshow(img)
+    plt.show()
 
-    # Denoising with multimodal guidance
-    print("Denoising...")
-    z_denoised = lu.multimodal_denoise(z_t, emb_audio, emb_image, au_pipe, sd_pipe, steps=100)
-
-    # Decode to spectrogram
-    spectrogram = lu.decode_latents(z_denoised, sd_pipe)
-
-    # Save image
-    image_np = spectrogram.cpu().permute(0, 2, 3, 1).numpy()[0]
-    image_pil = Image.fromarray((image_np * 255).astype("uint8"))
-    image_pil.save("generated_spectrogram.png")
-
-    # Convert to audio
-    _ = lu.vocode_from_spectrogram(spectrogram)
-
-if __name__ == "__main__":
-    main()
+    # capito l'errore. Dobbiamo mettere fp16=False per usare doppia precisione, ma la GPU non regge, 
