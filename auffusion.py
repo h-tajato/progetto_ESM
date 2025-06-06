@@ -173,7 +173,7 @@ class AuffusionGuidance(nn.Module):
 
         for i, t in enumerate(self.scheduler.timesteps):
             # print(f'[SCHEDULER]\t-\tt:  {t.item()}\tt shape: {t.shape}')
-            print(f'[SCHEDULER]\t-\titerazione di denoising {t.item()}')
+            print(f'[SCHEDULER]\t-\titerazione di denoising {t.item()},\ti={i}')
             # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
             latent_model_input = torch.cat([latents] * 2)
 
