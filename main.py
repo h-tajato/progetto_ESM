@@ -3,12 +3,16 @@ import matplotlib.pyplot as plt
 import torch
 import numpy as np
 import soundfile as sf
+from spettrogram import *
+
 
 if __name__ == '__main__':
     model = AuffusionGuidance(fp16=False)
     model = model.to(torch.device('cpu'))
-    prompt_audio = 'nautical horn sound of ships sailing'
-    prompt_video = 'a painting of ships navigating the ocean, grayscale'
+    prompt_audio = 'coins falling on metal'
+    prompt_video = 'a painting of a majestic mountain on the sea, grayscale'
+    input_spectrogram = spectrify('.\\guida\\suono_monete.mp3')
+    
     spect = model.prompt_to_spec(prompt_audio, prompt_video, height=256, width=1024, num_inference_steps=100, device=torch.device('cpu'), guidance_scale=10)
 
     print(torch.mean(spect), torch.min(spect), torch.max(spect))
@@ -27,3 +31,4 @@ if __name__ == '__main__':
     plt.imsave('C:\\Users\\Flexo Rodriguez\\Desktop\\progetto_ESM\\prove\\ship.png', img)
     # plt.show()
     # capito l'errore. Dobbiamo mettere fp16=False per usare doppia precisione, ma la GPU non regge, 
+
