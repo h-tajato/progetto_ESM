@@ -13,7 +13,7 @@ if __name__ == '__main__':
     prompt_video = 'a painting of a majestic mountain on the sea, grayscale'
     input_spectrogram = spectrify('.\\guida\\suono_monete.mp3')
     
-    spect = model.prompt_to_spec(prompt_audio, prompt_video, height=256, width=1024, num_inference_steps=100, device=torch.device('cpu'), guidance_scale=10)
+    spect = model.prompt_to_spec(prompt_audio, prompt_video, height=256, width=1024, num_inference_steps=100, device=torch.device('cpu'), guidance_scale_audio=10, guidance_scale_video=6)
 
     print(torch.mean(spect), torch.min(spect), torch.max(spect))
     img = spect.detach().cpu().squeeze(0) 

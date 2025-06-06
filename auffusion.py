@@ -161,7 +161,8 @@ class AuffusionGuidance(nn.Module):
     @torch.no_grad()
     def produce_latents(self, text_embeddings_au, text_embeddings_sd, 
                         height=512, width=512, num_inference_steps=50, 
-                        guidance_scale=7.5, latents=None, generator=None):
+                        guidance_scale_video=7.5,guidance_scale_audio=7.5,
+                        latents=None, generator=None):
 
         # definizione costanti utili per la media pesata iterativa
         T = 991
@@ -169,13 +170,13 @@ class AuffusionGuidance(nn.Module):
             t_a, t_v = 1.0, 0.9
             latents = torch.randn((text_embeddings_au.shape[0] // 2, self.unet.config.in_channels, height // 8, width // 8), generator=generator, dtype=self.unet.dtype).to(text_embeddings_au.device)
         else:
-            t_a, t_v = 0.9, 1.0
-            
+            t_a, t_v = 0.5, 1.0
+            noise_par = 0.9
             # Genera rumore come nel ramo if
             noise = torch.randn(latents.shape, generator=generator, dtype=self.unet.dtype).to(latents.device)
 
             # print("Rumore aggiunto al latente in input (manuale, senza scheduler)")
-            latents = latents + 0.7 * noise  # 0.1 è il livello di rumore, regola a piacere
+            latents = (1-noise_par)*latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
 
         self.scheduler.set_timesteps(num_inference_steps)
 
@@ -192,7 +193,7 @@ class AuffusionGuidance(nn.Module):
 
             # perform guidance
             noise_pred_uncond_au, noise_pred_cond_au = noise_pred_au.chunk(2)
-            noise_pred_au = noise_pred_uncond_au + guidance_scale * (noise_pred_cond_au - noise_pred_uncond_au)
+            noise_pred_au = noise_pred_uncond_au + guidance_scale_audio * (noise_pred_cond_au - noise_pred_uncond_au)
 
             # fase stable diffusion
 
@@ -201,7 +202,7 @@ class AuffusionGuidance(nn.Module):
 
             # perform guidance
             noise_pred_uncond_sd, noise_pred_cond_sd = noise_pred_sd.chunk(2)
-            noise_pred_sd = noise_pred_uncond_sd + guidance_scale * (noise_pred_cond_sd - noise_pred_uncond_sd)  
+            noise_pred_sd = noise_pred_uncond_sd + guidance_scale_video * (noise_pred_cond_sd - noise_pred_uncond_sd)  
 
             # media 
             omega_a = heaviside(t_a*T-t.item()) 
@@ -211,7 +212,7 @@ class AuffusionGuidance(nn.Module):
             lambda_v = omega_v / (omega_a+omega_v) 
 
             noise_pred = lambda_a*noise_pred_au + lambda_v*noise_pred_sd
-            # print(f'[SCHEDULER]\t-\t(T, t, l_a, l_b) = ({T, t.item(), lambda_a, lambda_v})')
+            print(f'[SCHEDULER]\t-\t(T, t, l_a, l_b) = ({T, t.item(), lambda_a, lambda_v})')
 
             # print(f'[SCHEDULER]\tnoise pred a: {noise_pred_cond_au, noise_pred_uncond_au}')
             # print(f'[SCHEDULER]\tnoise pred v: {noise_pred_cond_sd, noise_pred_uncond_sd}')
