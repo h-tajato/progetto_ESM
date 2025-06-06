@@ -164,19 +164,18 @@ class AuffusionGuidance(nn.Module):
                         guidance_scale=7.5, latents=None, generator=None):
 
         # definizione costanti utili per la media pesata iterativa
-        t_a, t_v = 1.0, 0.9
         T = 991
         if latents is None:
+            t_a, t_v = 1.0, 0.9
             latents = torch.randn((text_embeddings_au.shape[0] // 2, self.unet.config.in_channels, height // 8, width // 8), generator=generator, dtype=self.unet.dtype).to(text_embeddings_au.device)
         else:
+            t_a, t_v = 0.9, 1.0
+            
             # Genera rumore come nel ramo if
             noise = torch.randn(latents.shape, generator=generator, dtype=self.unet.dtype).to(latents.device)
 
-            # Aggiunge rumore al latente (modulabile se vuoi un’intensità scalabile)
-            latents = latents + noise
-
             # print("Rumore aggiunto al latente in input (manuale, senza scheduler)")
-            latents = latents + 0.1 * noise  # 0.1 è il livello di rumore, regola a piacere
+            latents = latents + 0.7 * noise  # 0.1 è il livello di rumore, regola a piacere
 
         self.scheduler.set_timesteps(num_inference_steps)
 
@@ -369,7 +368,7 @@ class AuffusionGuidance(nn.Module):
 
         torch.cuda.empty_cache()
         gc.collect()
-        
+
         # Img latents -> imgs
         imgs = self.decode_latents(latents) # [1, 3, 512, 512]
         return imgs
