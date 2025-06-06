@@ -161,7 +161,7 @@ class AuffusionGuidance(nn.Module):
     @torch.no_grad()
     def produce_latents(self, text_embeddings_au, text_embeddings_sd, 
                         height=512, width=512, num_inference_steps=50, 
-                        guidance_scale_video=7.5,guidance_scale_audio=7.5,
+                        guidance_scale_audio=7.5,guidance_scale_video=7.5, 
                         latents=None, generator=None):
 
         # definizione costanti utili per la media pesata iterativa
@@ -212,7 +212,7 @@ class AuffusionGuidance(nn.Module):
             lambda_v = omega_v / (omega_a+omega_v) 
 
             noise_pred = lambda_a*noise_pred_au + lambda_v*noise_pred_sd
-            print(f'[SCHEDULER]\t-\t(T, t, l_a, l_b) = ({T, t.item(), lambda_a, lambda_v})')
+            #  print(f'[SCHEDULER]\t-\t(T, t, l_a, l_b) = ({T, t.item(), lambda_a, lambda_v})')
 
             # print(f'[SCHEDULER]\tnoise pred a: {noise_pred_cond_au, noise_pred_uncond_au}')
             # print(f'[SCHEDULER]\tnoise pred v: {noise_pred_cond_sd, noise_pred_uncond_sd}')
