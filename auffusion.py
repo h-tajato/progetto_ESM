@@ -176,7 +176,7 @@ class AuffusionGuidance(nn.Module):
             noise = torch.randn(latents.shape, generator=generator, dtype=self.unet.dtype).to(latents.device)
 
             # print("Rumore aggiunto al latente in input (manuale, senza scheduler)")
-            latents = (1-noise_par)*latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
+            latents = latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
 
         self.scheduler.set_timesteps(num_inference_steps)
 
