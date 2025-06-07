@@ -343,7 +343,7 @@ class AuffusionGuidance(nn.Module):
         else:
             # input spectrogram è un immagine (256,1024). Convertiamola a tensore 
             # rgb_spect = gray2rgb(input_spectrogram.astype(np.uint8))  # assicura [0,255]
-
+            rgb_spect *= 0.7
             rgb_spect = normalize_img(input_spectrogram)  # shape (H, W, 3), dtype float32
             spect_tensor = torch.from_numpy(rgb_spect).permute(2, 0, 1).unsqueeze(0)  # shape (1, 3, H, W)
             spect_tensor = spect_tensor.to(dtype=self.unet.dtype, device=self.unet.device)
