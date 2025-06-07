@@ -8,38 +8,54 @@ import torchaudio, torch
 
 import torchaudio.transforms as T
 
+import torch
+import torchaudio
+import torchaudio.transforms as T
+
 def spectrify(audio_path: str):
-    # Carica audio
     waveform, sample_rate = torchaudio.load(audio_path)  # [C, N]
 
     # Converti in mono
     if waveform.shape[0] > 1:
-        waveform = waveform.mean(dim=0, keepdim=True)  # [1, N]
+        waveform = waveform.mean(dim=0, keepdim=True)
 
-    # Crop a 10 secondi se troppo lungo
-    max_samples = 10 * sample_rate
-    if waveform.shape[1] > max_samples:
-        waveform = waveform[:, :max_samples]
+    # Calcola lunghezza target per ottenere 1024 frame
+    n_fft = 1024
+    hop_length = 512
+    target_frames = 1024
+    target_samples = hop_length * (target_frames - 1) + n_fft  # = 524800
 
-    # Trasformazioni: MelSpectrogram + AmplitudeToDB
+    # Crop o padding per avere esattamente target_samples
+    if waveform.shape[1] > target_samples:
+        waveform = waveform[:, :target_samples]
+    elif waveform.shape[1] < target_samples:
+        pad_amount = target_samples - waveform.shape[1]
+        waveform = torch.nn.functional.pad(waveform, (0, pad_amount))
+
+    # Crea le trasformazioni
     mel_spectrogram = T.MelSpectrogram(
         sample_rate=sample_rate,
-        n_fft=1024,
-        hop_length=512,
-        n_mels=128
+        n_fft=n_fft,
+        hop_length=hop_length,
+        n_mels=256  # altezza desiderata
     )
     db_transform = T.AmplitudeToDB(top_db=80)
 
-    # Applica trasformazioni
-    mel_spec = mel_spectrogram(waveform)      # [1, n_mels, time]
-    mel_spec_db = db_transform(mel_spec)      # [1, n_mels, time]
+    # Applica le trasformazioni
+    mel_spec = mel_spectrogram(waveform)      # [1, 256, 1024]
+    mel_spec_db = db_transform(mel_spec)      # [1, 256, 1024]
 
-    return mel_spec_db.squeeze(0).numpy()  # tensore pronto per rete neurale
+    return mel_spec_db.squeeze(0).numpy(), mel_spec_db.squeeze(0).shape
 
 
-def save_spectrogram(path:str, spect)->bool:
+
+def save_spectrogram(path:str, spect, clip=False)->bool:
+    if(clip):
+        h, w = spect.shape[0], spect.shape[1]
+        
+    
     plt.figure()
-    plt.imshow(im, cmap='gray')
+    plt.imshow(spect, cmap='gray')
     plt.axis('off')
 
     plt.savefig(path, dpi=300, bbox_inches='tight', pad_inches=0)
@@ -48,8 +64,8 @@ def save_spectrogram(path:str, spect)->bool:
 if __name__ == '__main__':
     path = '.\\input_spectrograms\\prova.png'
     im = spectrify('.\\guida\\suono_monete.mp3')
-    save_spectrogram(path, im)
-    if (save_spectrogram):
+    res = save_spectrogram(path, im)
+    if (res):
         print('salvateggio eseguito con successo')
     else: 
         raise RuntimeError('Errore sconosciuto')
