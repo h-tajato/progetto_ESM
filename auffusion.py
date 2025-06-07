@@ -331,8 +331,12 @@ class AuffusionGuidance(nn.Module):
             # Img latents -> imgs
         
         else:
-            # input spectrogram è un immagine. Convertiamola a tensore 
+            # input spectrogram è un immagine (256,1024). Convertiamola a tensore 
             spect_tensor = torch.from_numpy(input_spectrogram).float() / 255.0
+
+            gray_spect_tensor = spect_tensor[..., np.newaxis]
+            gray_spect_tensor = np.repeat(gray_spect_tensor, 3, axis=2)
+
 
             spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0)
             latent_1 = self.encode_imgs(spect_tensor)
