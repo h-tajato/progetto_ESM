@@ -301,40 +301,6 @@ class AuffusionGuidance(nn.Module):
                        negative_prompt_au='',negative_prompt_sd = '',
                        height=512, width=512, 
                        num_inference_steps=50, guidance_scale_audio=7.5, guidance_scale_video=7.5, 
-                       latents=None, device=None, generator=None):
-        
-        if isinstance(prompt_au, str) and isinstance(prompt_sd, str):
-            prompt_au = [prompt_au]
-            prompt_sd = [prompt_sd]
-
-        if isinstance(negative_prompt_au, str) and isinstance(negative_prompt_sd, str):
-            negative_prompt_au = [negative_prompt_au]
-            negative_prompt_sd = [negative_prompt_sd]
-
-        # Prompt auffusion -> text embeds auffusion
-        pos_embeds_au = self.get_text_embeds(prompt_au, device) # [1, 77, 768]
-        neg_embeds_au = self.get_text_embeds(negative_prompt_au, device)
-        text_embeds_au = torch.cat([neg_embeds_au, pos_embeds_au], dim=0) # [2, 77, 768]
-
-        # Prompt stable diffusion -> text embeds stable diffusion
-        pos_embeds_sd = self.get_text_embeds(prompt_sd, device) # [1, 77, 768]
-        neg_embeds_sd = self.get_text_embeds(negative_prompt_sd, device)
-        text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
-
-        # Text embeds -> img latents
-        latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
-                                       width=width, latents=latents, num_inference_steps=num_inference_steps, 
-                                       guidance_scale_audio=guidance_scale_audio, 
-                                       guidance_scale_video=guidance_scale_video, generator=generator) # [1, 4, 64, 64]
-
-        # Img latents -> imgs
-        imgs = self.decode_latents(latents) # [1, 3, 512, 512]
-        return imgs
-    
-    def prompt_image_to_spect(self, prompt_au, prompt_sd, 
-                       negative_prompt_au='',negative_prompt_sd = '',
-                       height=512, width=512, 
-                       num_inference_steps=50, guidance_scale=7.5, 
                        latents=None, device=None, generator=None, input_spectrogram=None):
         
         if isinstance(prompt_au, str) and isinstance(prompt_sd, str):
@@ -345,37 +311,89 @@ class AuffusionGuidance(nn.Module):
             negative_prompt_au = [negative_prompt_au]
             negative_prompt_sd = [negative_prompt_sd]
 
+            # Prompt auffusion -> text embeds auffusion
+            pos_embeds_au = self.get_text_embeds(prompt_au, device) # [1, 77, 768]
+            neg_embeds_au = self.get_text_embeds(negative_prompt_au, device)
+            text_embeds_au = torch.cat([neg_embeds_au, pos_embeds_au], dim=0) # [2, 77, 768]
+
+            # Prompt stable diffusion -> text embeds stable diffusion
+            pos_embeds_sd = self.get_text_embeds(prompt_sd, device) # [1, 77, 768]
+            neg_embeds_sd = self.get_text_embeds(negative_prompt_sd, device)
+            text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
+
         if input_spectrogram is None:
-            raise ValueError('Errore! chiama prompt to to spec invece di questa')
-        
-        spect_tensor = torch.from_numpy(input_spectrogram).float() / 255.0
+            # Text embeds -> img latents
+            latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
+                                        width=width, latents=latents, num_inference_steps=num_inference_steps, 
+                                        guidance_scale_audio=guidance_scale_audio, 
+                                        guidance_scale_video=guidance_scale_video, generator=generator) # [1, 4, 64, 64]
 
-        spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0)
-        latent_1 = self.encode_imgs(spect_tensor)
+            # Img latents -> imgs
+        
+        else:
+            # input spectrogram è un immagine. Convertiamola a tensore 
+            spect_tensor = torch.from_numpy(input_spectrogram).float() / 255.0
+
+            spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0)
+            latent_1 = self.encode_imgs(spect_tensor)
+            torch.cuda.empty_cache()
+            gc.collect()
+            latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
+                                        width=width, latents=latents, num_inference_steps=num_inference_steps, 
+                                        guidance_scale_audio=guidance_scale_audio, 
+                                        guidance_scale_video=guidance_scale_video, generator=generator, latents=latent_1)
+
 
         torch.cuda.empty_cache()
         gc.collect()
-        
-
-        # Prompt auffusion -> text embeds auffusion
-        pos_embeds_au = self.get_text_embeds(prompt_au, device) # [1, 77, 768]
-        neg_embeds_au = self.get_text_embeds(negative_prompt_au, device)
-        text_embeds_au = torch.cat([neg_embeds_au, pos_embeds_au], dim=0) # [2, 77, 768]
-
-        # Prompt stable diffusion -> text embeds stable diffusion
-        pos_embeds_sd = self.get_text_embeds(prompt_sd, device) # [1, 77, 768]
-        neg_embeds_sd = self.get_text_embeds(negative_prompt_sd, device)
-        text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
-
-        # Text embeds -> img latents
-        latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, width=width, latents=latent_1, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale, generator=generator) # [1, 4, 64, 64]
-
-        torch.cuda.empty_cache()
-        gc.collect()
-
-        # Img latents -> imgs
         imgs = self.decode_latents(latents) # [1, 3, 512, 512]
         return imgs
+    
+    # def prompt_image_to_spect(self, prompt_au, prompt_sd, 
+    #                    negative_prompt_au='',negative_prompt_sd = '',
+    #                    height=512, width=512, 
+    #                    num_inference_steps=50, guidance_scale=7.5, 
+    #                    latents=None, device=None, generator=None, input_spectrogram=None):
+        
+    #     if isinstance(prompt_au, str) and isinstance(prompt_sd, str):
+    #         prompt_au = [prompt_au]
+    #         prompt_sd = [prompt_sd]
+
+    #     if isinstance(negative_prompt_au, str) and isinstance(negative_prompt_sd, str):
+    #         negative_prompt_au = [negative_prompt_au]
+    #         negative_prompt_sd = [negative_prompt_sd]
+
+    #     if input_spectrogram is None:
+    #         raise ValueError('Errore! chiama prompt to to spec invece di questa')
+        
+    #     spect_tensor = torch.from_numpy(input_spectrogram).float() / 255.0
+
+    #     spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0)
+    #     latent_1 = self.encode_imgs(spect_tensor)
+
+    #     torch.cuda.empty_cache()
+    #     gc.collect()
+        
+
+    #     # Prompt auffusion -> text embeds auffusion
+    #     pos_embeds_au = self.get_text_embeds(prompt_au, device) # [1, 77, 768]
+    #     neg_embeds_au = self.get_text_embeds(negative_prompt_au, device)
+    #     text_embeds_au = torch.cat([neg_embeds_au, pos_embeds_au], dim=0) # [2, 77, 768]
+
+    #     # Prompt stable diffusion -> text embeds stable diffusion
+    #     pos_embeds_sd = self.get_text_embeds(prompt_sd, device) # [1, 77, 768]
+    #     neg_embeds_sd = self.get_text_embeds(negative_prompt_sd, device)
+    #     text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
+
+    #     # Text embeds -> img latents
+    #     latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, width=width, latents=latent_1, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale, generator=generator) # [1, 4, 64, 64]
+
+    #     torch.cuda.empty_cache()
+    #     gc.collect()
+
+    #     # Img latents -> imgs
+    #     imgs = self.decode_latents(latents) # [1, 3, 512, 512]
+    #     return imgs
 
 if __name__ == '__main__':
     import numpy as np
