@@ -10,7 +10,7 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, DDIMSc
 from diffusers.utils.import_utils import is_xformers_available
 
 # from .perpneg_utils import weighted_perpendicular_aggregator
-
+import numpy as np
 from lightning import seed_everything
 
 import rootutils
@@ -177,7 +177,8 @@ class AuffusionGuidance(nn.Module):
 
             # print("Rumore aggiunto al latente in input (manuale, senza scheduler)")
             latents = latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
-
+            if torch.isnan(latents).any():
+                raise ValueError("Il tensore contiene NaN!")
         self.scheduler.set_timesteps(num_inference_steps)
 
         for i, t in enumerate(self.scheduler.timesteps):
@@ -323,30 +324,35 @@ class AuffusionGuidance(nn.Module):
 
         if input_spectrogram is None:
             # Text embeds -> img latents
-            latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
+            try:
+                latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
                                         width=width, latents=latents, num_inference_steps=num_inference_steps, 
                                         guidance_scale_audio=guidance_scale_audio, 
                                         guidance_scale_video=guidance_scale_video, generator=generator) # [1, 4, 64, 64]
-
+            except ValueError as e:
+                raise RuntimeError('Errore nella generazione del tensore latente')
             # Img latents -> imgs
         
         else:
             # input spectrogram è un immagine (256,1024). Convertiamola a tensore 
-            spect_tensor = torch.from_numpy(input_spectrogram).float() / 255.0
+            gray_spect = input_spectrogram[..., np.newaxis]
+            rgb_spect = np.repeat(gray_spect, 3, axis=2)
 
-            gray_spect_tensor = spect_tensor[..., np.newaxis]
-            gray_spect_tensor = np.repeat(gray_spect_tensor, 3, axis=2)
+            spect_tensor = torch.from_numpy(rgb_spect).to(dtype=self.precision_t) / 255.0
+            spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0).to(torch.device('cuda'))
 
-
-            spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0)
             latent_1 = self.encode_imgs(spect_tensor)
+
             torch.cuda.empty_cache()
             gc.collect()
-            latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
+            try:
+                latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
                                         width=width, num_inference_steps=num_inference_steps, 
                                         guidance_scale_audio=guidance_scale_audio, 
                                         guidance_scale_video=guidance_scale_video, generator=generator, latents=latent_1)
-
+            except ValueError as e:
+                raise RuntimeError('Errore nella generazione del tensore latente')
+            
 
         torch.cuda.empty_cache()
         gc.collect()
