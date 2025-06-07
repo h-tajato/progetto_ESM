@@ -177,6 +177,7 @@ class AuffusionGuidance(nn.Module):
 
             # print("Rumore aggiunto al latente in input (manuale, senza scheduler)")
             latents = latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
+
             if torch.isnan(latents).any():
                 raise ValueError("Il tensore contiene NaN!")
         self.scheduler.set_timesteps(num_inference_steps)
@@ -213,6 +214,10 @@ class AuffusionGuidance(nn.Module):
             lambda_v = omega_v / (omega_a+omega_v) 
 
             noise_pred = lambda_a*noise_pred_au + lambda_v*noise_pred_sd
+
+            if torch.isnan(noise_pred).any():
+                raise ValueError("Il tensore rumore contiene NaN!")
+
             #  print(f'[SCHEDULER]\t-\t(T, t, l_a, l_b) = ({T, t.item(), lambda_a, lambda_v})')
 
             # print(f'[SCHEDULER]\tnoise pred a: {noise_pred_cond_au, noise_pred_uncond_au}')
@@ -330,7 +335,7 @@ class AuffusionGuidance(nn.Module):
                                         guidance_scale_audio=guidance_scale_audio, 
                                         guidance_scale_video=guidance_scale_video, generator=generator) # [1, 4, 64, 64]
             except ValueError as e:
-                raise RuntimeError('Errore nella generazione del tensore latente')
+                raise e
             # Img latents -> imgs
         
         else:
