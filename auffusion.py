@@ -300,7 +300,7 @@ class AuffusionGuidance(nn.Module):
     def prompt_to_spec(self, prompt_au, prompt_sd, 
                        negative_prompt_au='',negative_prompt_sd = '',
                        height=512, width=512, 
-                       num_inference_steps=50, guidance_scale=7.5, 
+                       num_inference_steps=50, guidance_scale_audio=7.5, guidance_scale_video=7.5, 
                        latents=None, device=None, generator=None):
         
         if isinstance(prompt_au, str) and isinstance(prompt_sd, str):
@@ -322,7 +322,10 @@ class AuffusionGuidance(nn.Module):
         text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
 
         # Text embeds -> img latents
-        latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, width=width, latents=latents, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale, generator=generator) # [1, 4, 64, 64]
+        latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
+                                       width=width, latents=latents, num_inference_steps=num_inference_steps, 
+                                       guidance_scale_audio=guidance_scale_audio, 
+                                       guidance_scale_video=guidance_scale_video, generator=generator) # [1, 4, 64, 64]
 
         # Img latents -> imgs
         imgs = self.decode_latents(latents) # [1, 3, 512, 512]

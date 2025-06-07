@@ -37,16 +37,22 @@ def spectrify(audio_path: str):
     return mel_spec_db.squeeze(0).numpy()  # tensore pronto per rete neurale
 
 
-if __name__ == '__main__':
-    im = spectrify('.\\guida\\suono_monete.mp3')
-
+def save_spectrogram(path:str, spect)->bool:
     plt.figure()
-    plt.imshow(im, clim=None, cmap='jet')
-    plt.title('Spettrogramma del Napule')
-    plt.xlabel('[s]')
-    plt.ylabel('[Mels]')
-    plt.colorbar()
-    plt.show()
+    plt.imshow(im, cmap='gray')
+    plt.axis('off')
+
+    plt.savefig(path, dpi=300, bbox_inches='tight', pad_inches=0)
+    return True
+
+if __name__ == '__main__':
+    path = '.\\input_spectrograms\\prova.png'
+    im = spectrify('.\\guida\\suono_monete.mp3')
+    save_spectrogram(path, im)
+    if (save_spectrogram):
+        print('salvateggio eseguito con successo')
+    else: 
+        raise RuntimeError('Errore sconosciuto')
 
 # # waveform, sample_rate = torchaudio.load("Suoni/coin-sound-79325.mp3")
 # fs, segnale = None, None  # inizializzo per chiarezza
