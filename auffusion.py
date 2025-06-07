@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from skimage.color import gray2rgb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -340,14 +341,13 @@ class AuffusionGuidance(nn.Module):
         
         else:
             # input spectrogram è un immagine (256,1024). Convertiamola a tensore 
-            gray_spect = input_spectrogram[..., np.newaxis]
-            rgb_spect = np.repeat(gray_spect, 3, axis=2)
+            rgb_spect = gray2rgb(input_spectrogram.astype(np.uint8))  # assicura [0,255]
+            spect_tensor = torch.from_numpy(rgb_spect).float() / 255.0
+            spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0).to(self.unet.device, dtype=self.unet.dtype)
 
-            spect_tensor = torch.from_numpy(rgb_spect).to(dtype=self.precision_t) / 255.0
-            spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0).to(torch.device('cuda'))
-
+            # Encode (assumendo sia un VAE)
             latent_1 = self.encode_imgs(spect_tensor)
-
+            latent_1 = latent_1.to(self.unet.device, dtype=self.unet.dtype)
             torch.cuda.empty_cache()
             gc.collect()
             try:
