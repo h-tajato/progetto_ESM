@@ -339,7 +339,7 @@ class AuffusionGuidance(nn.Module):
             torch.cuda.empty_cache()
             gc.collect()
             latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
-                                        width=width, latents=latents, num_inference_steps=num_inference_steps, 
+                                        width=width, num_inference_steps=num_inference_steps, 
                                         guidance_scale_audio=guidance_scale_audio, 
                                         guidance_scale_video=guidance_scale_video, generator=generator, latents=latent_1)
 

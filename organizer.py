@@ -15,7 +15,8 @@ if __name__ == '__main__':
             new_path = f'\\input_spectrograms\\{dir_name}\\{dir_name}.png'
             os.makedirs(f".\\input_spectrograms\\{dir_name}", exist_ok=True)
             spectrogram = sp.spectrify(complete_path)
-            
+            if(sp.save_spectrogram(new_path)):
+                print(f'[MAIN]\t{file} salvato con successo')
 
 
         
