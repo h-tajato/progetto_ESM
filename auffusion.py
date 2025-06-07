@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.utils import save_image
 import gc
-
+from converter import normalize_img
 from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, DDIMScheduler, StableDiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
 
@@ -174,11 +174,12 @@ class AuffusionGuidance(nn.Module):
             t_a, t_v = 0.5, 1.0
             noise_par = 0.9
             # Genera rumore come nel ramo if
-            noise = torch.randn(latents.shape, generator=generator, dtype=self.unet.dtype).to(latents.device)
+            # noise = torch.randn(latents.shape, generator=generator, dtype=self.unet.dtype).to(latents.device)
 
             # print("Rumore aggiunto al latente in input (manuale, senza scheduler)")
-            latents = latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
-
+            # latents = latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
+            latents = self.scheduler.add_noise(latents, torch.randn_like(latents), 
+                                                torch.tensor([T], dtype=torch.long).to(text_embeddings_au.device))
             if torch.isnan(latents).any():
                 raise ValueError("Il tensore contiene NaN!")
         self.scheduler.set_timesteps(num_inference_steps)
@@ -341,9 +342,15 @@ class AuffusionGuidance(nn.Module):
         
         else:
             # input spectrogram è un immagine (256,1024). Convertiamola a tensore 
-            rgb_spect = gray2rgb(input_spectrogram.astype(np.uint8))  # assicura [0,255]
-            spect_tensor = torch.from_numpy(rgb_spect).float() / 255.0
-            spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0).to(self.unet.device, dtype=self.unet.dtype)
+            # rgb_spect = gray2rgb(input_spectrogram.astype(np.uint8))  # assicura [0,255]
+
+            rgb_spect = normalize_img(input_spectrogram)  # shape (H, W, 3), dtype float32
+            spect_tensor = torch.from_numpy(rgb_spect).permute(2, 0, 1).unsqueeze(0)  # shape (1, 3, H, W)
+            spect_tensor = spect_tensor.to(dtype=self.unet.dtype, device=self.unet.device)
+
+            # rgb_spect = np.float16(normalize_img(input_spectrogram)) / np.max(input_spectrogram)
+            # spect_tensor = torch.from_numpy(rgb_spect).permute(2,0,1).to(dtype=self.unet.dtype) 
+            # spect_tensor = spect_tensor.squeeze(0).to(self.unet.device)
 
             # Encode (assumendo sia un VAE)
             latent_1 = self.encode_imgs(spect_tensor)
