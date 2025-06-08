@@ -1,30 +1,33 @@
-from pathlib import Path
+# Librerie e funzioni
 
-# from skimage.color import gray2rgb
+import gc
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import rootutils
+
 from torchvision.utils import save_image
-import gc
+from pathlib import Path
 from libs.converter import normalize_img
 from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, DDIMScheduler, StableDiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
-
-# from .perpneg_utils import weighted_perpendicular_aggregator
-import numpy as np
 from lightning import seed_everything
-
-import rootutils
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
 from libs.auffusion_converter import Generator, denormalize_spectrogram
 
+# Identificazione della cartella di main effettiva tramite la ricerca del file .project-root
+rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
+# Funzione di heavside per cui: 
+# H(x) = 1 (x >= 0)
+# H(x) = 0 (x < 0)
 def heaviside(x):
         if x>=0:
             return 1
         else:
             return 0
 
+# Dichiarazione della classe utilizzata
 class AuffusionGuidance(nn.Module):
     def __init__(
         self, 
@@ -89,161 +92,99 @@ class AuffusionGuidance(nn.Module):
 
         return prompt_embeds
 
-    
-
-    def train_step(self, text_embeddings, pred_spec, guidance_scale=100, as_latent=False, t=None, grad_scale=1, save_guidance_path:Path=None):
-        # import pdb; pdb.set_trace()
-        pred_spec = pred_spec.to(self.vae.dtype)
-
-        if as_latent:
-            latents = pred_spec
-        else:    
-            if pred_spec.shape[1] != 3:
-                pred_spec = pred_spec.repeat(1, 3, 1, 1)
-
-            # encode image into latents with vae, requires grad!
-            latents = self.encode_imgs(pred_spec)
-
-        if t is None:
-            # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
-            t = torch.randint(self.min_step, self.max_step + 1, (latents.shape[0],), dtype=torch.long, device=latents.device)
-        else:
-            t = t.to(dtype=torch.long, device=latents.device)
-
-        # predict the noise residual with unet, NO grad!
-        with torch.no_grad():
-            # add noise
-            noise = torch.randn_like(latents)
-            latents_noisy = self.scheduler.add_noise(latents, noise, t)
-            # pred noise
-            latent_model_input = torch.cat([latents_noisy] * 2)
-            tt = torch.cat([t] * 2)
-            noise_pred = self.unet(latent_model_input, tt, encoder_hidden_states=text_embeddings).sample
-
-            # perform guidance (high scale from paper!)
-            noise_pred_uncond, noise_pred_pos = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_pos - noise_pred_uncond)
-
-        # w(t), sigma_t^2
-        w = (1 - self.alphas_cumprod[t])
-        grad = grad_scale * w[:, None, None, None] * (noise_pred - noise)
-        grad = torch.nan_to_num(grad)
-
-        if save_guidance_path:
-            with torch.no_grad():
-                if as_latent:
-                    pred_rgb_512 = self.decode_latents(latents)
-
-                # visualize predicted denoised image
-                # The following block of code is equivalent to `predict_start_from_noise`...
-                # see zero123_utils.py's version for a simpler implementation.
-                alphas = self.scheduler.alphas.to(latents.device)
-                total_timesteps = self.max_step - self.min_step + 1
-                index = total_timesteps - t.to(latents.device) - 1 
-                b = len(noise_pred)
-                a_t = alphas[index].reshape(b,1,1,1).to(latents.device)
-                sqrt_one_minus_alphas = torch.sqrt(1 - alphas)
-                sqrt_one_minus_at = sqrt_one_minus_alphas[index].reshape((b,1,1,1)).to(latents.device)                
-                pred_x0 = (latents_noisy - sqrt_one_minus_at * noise_pred) / a_t.sqrt() # current prediction for x_0
-                result_hopefully_less_noisy_image = self.decode_latents(pred_x0.to(latents.type(self.precision_t)))
-
-                # visualize noisier image
-                result_noisier_image = self.decode_latents(latents_noisy.to(pred_x0).type(self.precision_t))
-
-                # all 3 input images are [1, 3, H, W], e.g. [1, 3, 512, 512]
-                viz_images = torch.cat([pred_rgb_512, result_noisier_image, result_hopefully_less_noisy_image],dim=0)
-                save_image(viz_images, save_guidance_path)
-
-        targets = (latents - grad).detach()
-        loss = 0.5 * F.mse_loss(latents.float(), targets, reduction='sum') / latents.shape[0]
-
-        return loss
-
-
+    # Funzione di generazione dei latenti tramire iterazioni di denoising con la U-NET
     @torch.no_grad()
     def produce_latents(self, text_embeddings_au, text_embeddings_sd, 
                         height=512, width=512, num_inference_steps=50, 
                         guidance_scale_audio=7.5,guidance_scale_video=7.5, 
                         latents=None, generator=None, strength=0.8):
 
-        # definizione costanti utili per la media pesata iterativa
+        # Definizione della variabile per identificare lo "stato di partenza" del denoising
         T = 991
-        # scheduler_1 = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True, steps_offset=1)
-        # scheduler_1.set_timesteps(num_inference_steps=1000)
 
+        # Gestione del caso guidato e non guidato
         if latents is None:
+            # Parametri per comprendere l'incidenza, uno solo tra i due valori (indipendenza da chi), può assumere valori nell'intervallo [0,1]
             t_a, t_v = 1.0, 0.9
+            
+            # Generazione, nel caso non guidato, del rumore gaussiano a media 0 e a varianza 1 (o identica)
             latents = torch.randn((text_embeddings_au.shape[0] // 2, self.unet.config.in_channels, height // 8, width // 8), generator=generator, dtype=self.unet.dtype).to(text_embeddings_au.device)
         else:
             t_a, t_v = 0.5, 1.0
-            # noise_par = 0.9
-            # Genera rumore come nel ramo if
-            # noise = torch.randn(latents.shape, generator=generator, dtype=self.unet.dtype).to(latents.device)
-
-            # print("Rumore aggiunto al latente in input (manuale, senza scheduler)")
-            # latents = latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
+            
+            # Generazione del rumore, aggiungerndo al riferimento dato in ingresso un rumore ben definito dallo stato della prima iterazione
             latents = self.scheduler.add_noise(latents, torch.randn_like(latents), 
                                                 torch.tensor([T], dtype=torch.long).to(text_embeddings_au.device))
             if torch.isnan(latents).any():
                 raise ValueError("Il tensore contiene NaN!")
 
+        # Setting del timestep, nel caso strength sia impostato, allora si avrà do conseguenza una "rifuzione" di iterazioni di denoising (permette di decidere l'incidenza del rumore di riferimento inserito)
         self.scheduler.set_timesteps(num_inference_steps)
         t_start = int(num_inference_steps*(1-strength))
         timesteps = self.scheduler.timesteps[t_start:]
 
+        # Ciclo di denoising
         for i, t in enumerate(timesteps):
-            # print(f'[SCHEDULER]\t-\tt:  {t.item()}\tt shape: {t.shape}')
+            # Print di servizio(per controllare le iterzioni svolte)
             print(f'[SCHEDULER]\t-\titerazione di denoising {t.item()},\ti={i}')
-            # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
+            
+            # Concatenazione dei vettori latenti
             latent_model_input = torch.cat([latents] * 2)
 
-            # fase auffusion
-
-            # predict the noise residual
+            # APPLICAZIONE DEL MODELLO DI DENOISING
+            
+            # -----> Processing audio <----- #
+            # Predizione del rumore tramite la unet
             noise_pred_au = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings_au)['sample']
 
-            # perform guidance
+            # Ricavo il rumore predetto condizionato dal prompt e non condizionato dal prompt 
             noise_pred_uncond_au, noise_pred_cond_au = noise_pred_au.chunk(2)
+
+            # Vado a processare il rumore in base a quello che ho ottenuto (rumore condizionato e non condizionato)
+            # prodotto di classifier free-guidance
             noise_pred_au = noise_pred_uncond_au + guidance_scale_audio * (noise_pred_cond_au - noise_pred_uncond_au)
 
-            # fase stable diffusion
-
-            # predict the noise residual
+            # -----> Processing video <----- #
+            # Predizione del rumore tramite la unet
             noise_pred_sd = self.unet_sd(latent_model_input, t, encoder_hidden_states=text_embeddings_sd)['sample']
 
-            # perform guidance
+            # Ricavo il rumore condizionato dal prompt e non condizionato dal prompt 
             noise_pred_uncond_sd, noise_pred_cond_sd = noise_pred_sd.chunk(2)
+
+            # Vado a processare il rumore in base a quello che ho ottenuto (rumore condizionato e non condizionato)
+            # prodotto di classifier free-guidance
             noise_pred_sd = noise_pred_uncond_sd + guidance_scale_video * (noise_pred_cond_sd - noise_pred_uncond_sd)  
 
-            # media 
+            # -----> Implementazione del paper <----- #
+
+            # Calcolo dei coefficenti omega_v ed omega_a di cui parla il paper per il calcolo dei lambda
             omega_a = heaviside(t_a*T-t.item()) 
             omega_v = heaviside(t_v*T-t.item())
 
+            # Calcolo dei lambda in base ai precedenti parametri
             lambda_a = omega_a / (omega_a+omega_v) 
             lambda_v = omega_v / (omega_a+omega_v) 
 
+            # Media "pesata" dei rumori ottenuti dalle due unet
             noise_pred = lambda_a*noise_pred_au + lambda_v*noise_pred_sd
 
+            # Controllo per eventuali valori NaN (può capitare se eseguito su GPU più scarse in prestazioni)
             if torch.isnan(noise_pred).any():
                 raise ValueError("Il tensore rumore contiene NaN!")
 
-            #  print(f'[SCHEDULER]\t-\t(T, t, l_a, l_b) = ({T, t.item(), lambda_a, lambda_v})')
-
-            # print(f'[SCHEDULER]\tnoise pred a: {noise_pred_cond_au, noise_pred_uncond_au}')
-            # print(f'[SCHEDULER]\tnoise pred v: {noise_pred_cond_sd, noise_pred_uncond_sd}')
-            # compute the previous noisy sample x_t -> x_t-1
+            # Generazione del nuovo latents da processare tramite la "rimozione" del rumore con lo schedulers
             latents = self.scheduler.step(noise_pred, t, latents)['prev_sample']
 
         return latents
 
     def decode_latents(self, latents):
-        # Impostazione del latente ricevuto in ingresso secondo il dtype dell'encoder
+        # Vado ad adattare il latens alla tipologia di dato che può processare il VAE
         latents = latents.to(self.vae.dtype)
 
-        # vado a rescalare il latent del decoder secondo il fattore impostato
+        # Vado a riscalare il valore del latents (compenso dello scalaggio in fase di encoding per evitare valori troppo piccoli)
         latents = 1 / self.vae.config.scaling_factor * latents
 
-        # Vado a decodificare il latent tramite l'encoder
+        # Decodifica effettiva del dato
         imgs = self.vae.decode(latents).sample
 
         # Dato che ho valori compresi tra -1 ed 1, vado a restringere il range tra 0 ed 1
@@ -255,60 +196,28 @@ class AuffusionGuidance(nn.Module):
         return imgs
 
     def encode_imgs(self, imgs):
-        # imgs: [B, 3, H, W]
-
-        # Operazione inversa, per portare il range da [0,1] a [-1,1]
+        
+        # Riporto l'immagine dall'essere tra 0 ed 1 (considerando un immagine normalizzata) a -1 ed 1
         imgs = 2 * imgs - 1
 
-        # Calcolo del vettore latente tramite l'encoder
+        # Vado a calcolare il vettore latenti considerato
         posterior = self.vae.encode(imgs).latent_dist
         
-        # Moltiplicazione per il fattore di scala
+        # Vado a scalare tale valore per evitare che i valori ottenuti, se troppo piccoli, vengano ignorati (zero crossing)
         latents = posterior.sample() * self.vae.config.scaling_factor
 
         return latents
 
     def spec_to_audio(self, spec):
+
+        # Carico lo spettrogramma sulla GPU
         spec = spec.to(dtype=self.precision_t)
+
+        # Vado a denoramlizzare lo spettrogramma
         denorm_spec = denormalize_spectrogram(spec)
+
+        # Calcolo dell'audio tramite il vocoder importato
         audio = self.vocoder.inference(denorm_spec)
-        return audio
-
-    def prompt_to_audio(self, prompt_au, prompt_sd, 
-                       negative_prompt_au='',negative_prompt_sd = '',
-                       height=512, width=512, 
-                       num_inference_steps=50, guidance_scale=7.5, 
-                       latents=None, device=None, generator=None):
-        
-        if isinstance(prompt_au, str) and isinstance(prompt_sd, str):
-            prompt_au = [prompt_au]
-            prompt_sd = [prompt_sd]
-
-        if isinstance(negative_prompt_au, str) and isinstance(negative_prompt_sd, str):
-            negative_prompt_au = [negative_prompt_au]
-            negative_prompt_sd = [negative_prompt_sd]
-
-        # Prompt auffusion -> text embeds auffusion
-        pos_embeds_au = self.get_text_embeds(prompt_au, device) # [1, 77, 768]
-        neg_embeds_au = self.get_text_embeds(negative_prompt_au, device)
-        text_embeds_au = torch.cat([neg_embeds_au, pos_embeds_au], dim=0) # [2, 77, 768]
-
-        # Prompt stable diffusion -> text embeds stable diffusion
-        pos_embeds_sd = self.get_text_embeds(prompt_sd, device) # [1, 77, 768]
-        neg_embeds_sd = self.get_text_embeds(negative_prompt_sd, device)
-        text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
-
-        # Text embeds -> img latents
-        latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, width=width, latents=latents, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale, generator=generator) # [1, 4, 64, 64]
-
-        # Img latents -> imgs
-        imgs = self.decode_latents(latents) # [1, 3, 512, 512]
-        spec = imgs[0]
-        denorm_spec = denormalize_spectrogram(spec)
-        audio = self.vocoder.inference(denorm_spec)
-        # # Img to Numpy
-        # imgs = imgs.detach().cpu().permute(0, 2, 3, 1).numpy()
-        # imgs = (imgs * 255).round().astype('uint8')
 
         return audio
 
