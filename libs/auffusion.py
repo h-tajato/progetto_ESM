@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.utils import save_image
 import gc
-from converter import normalize_img
+from libs.converter import normalize_img
 from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, DDIMScheduler, StableDiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
 
@@ -17,7 +17,7 @@ from lightning import seed_everything
 import rootutils
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from auffusion_converter import Generator, denormalize_spectrogram
+from libs.auffusion_converter import Generator, denormalize_spectrogram
 
 def heaviside(x):
         if x>=0:

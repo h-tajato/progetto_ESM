@@ -1,1 +1,0 @@
-'.\\guida\\suono_monete.mp3'

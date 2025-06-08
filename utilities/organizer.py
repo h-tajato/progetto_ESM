@@ -1,5 +1,5 @@
 import os 
-import spettrogram as sp
+import libs.spettrogram as sp
 
 
 path = '.\\guida'
