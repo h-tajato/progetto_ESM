@@ -23,6 +23,17 @@ from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
 MAX_WAV_VALUE = 32768.0
 
 
+def normalize_img(x):
+    """
+    Converte un'immagine grayscale (H, W) in RGB (H, W, 3)
+    replicando il canale su 3 dimensioni.
+    """
+    if x.ndim != 2:
+        raise ValueError(f"Input must be 2D, got shape {x.shape}")
+    x = x / np.max(x)  # normalizza tra 0 e 1
+    x = np.stack([x] * 3, axis=-1)  # shape (H, W, 3)
+    return x.astype(np.float32)
+
 def load_wav(full_path):
     sampling_rate, data = read(full_path)
     return data, sampling_rate

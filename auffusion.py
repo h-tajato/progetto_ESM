@@ -1,16 +1,17 @@
 from pathlib import Path
 
+# from skimage.color import gray2rgb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.utils import save_image
-
-
+import gc
+from converter import normalize_img
 from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, DDIMScheduler, StableDiffusionPipeline
 from diffusers.utils.import_utils import is_xformers_available
 
 # from .perpneg_utils import weighted_perpendicular_aggregator
-
+import numpy as np
 from lightning import seed_everything
 
 import rootutils
@@ -44,6 +45,7 @@ class AuffusionGuidance(nn.Module):
         # import modello auffusion
         self.vae, self.tokenizer, self.text_encoder, self.unet = self.create_model_from_pipe(repo_id_auffusion, self.precision_t)
         self.scheduler = DDIMScheduler.from_pretrained(repo_id_auffusion, subfolder="scheduler", torch_dtype=self.precision_t)
+
         self.vocoder = Generator.from_pretrained(repo_id_auffusion, subfolder="vocoder").to(dtype=self.precision_t)
 
         self.register_buffer('alphas_cumprod', self.scheduler.alphas_cumprod)
@@ -161,17 +163,35 @@ class AuffusionGuidance(nn.Module):
     @torch.no_grad()
     def produce_latents(self, text_embeddings_au, text_embeddings_sd, 
                         height=512, width=512, num_inference_steps=50, 
-                        guidance_scale=7.5, latents=None, generator=None):
+                        guidance_scale_audio=7.5,guidance_scale_video=7.5, 
+                        latents=None, generator=None, strength=0.8):
 
         # definizione costanti utili per la media pesata iterativa
-        t_a, t_v = 1.0, 0.9
         T = 991
+        # scheduler_1 = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True, steps_offset=1)
+        # scheduler_1.set_timesteps(num_inference_steps=1000)
+
         if latents is None:
+            t_a, t_v = 1.0, 0.9
             latents = torch.randn((text_embeddings_au.shape[0] // 2, self.unet.config.in_channels, height // 8, width // 8), generator=generator, dtype=self.unet.dtype).to(text_embeddings_au.device)
+        else:
+            t_a, t_v = 0.5, 1.0
+            # noise_par = 0.9
+            # Genera rumore come nel ramo if
+            # noise = torch.randn(latents.shape, generator=generator, dtype=self.unet.dtype).to(latents.device)
+
+            # print("Rumore aggiunto al latente in input (manuale, senza scheduler)")
+            # latents = latents + noise_par * noise  # 0.1 è il livello di rumore, regola a piacere
+            latents = self.scheduler.add_noise(latents, torch.randn_like(latents), 
+                                                torch.tensor([T], dtype=torch.long).to(text_embeddings_au.device))
+            if torch.isnan(latents).any():
+                raise ValueError("Il tensore contiene NaN!")
 
         self.scheduler.set_timesteps(num_inference_steps)
+        t_start = int(num_inference_steps*(1-strength))
+        timesteps = self.scheduler.timesteps[t_start:]
 
-        for i, t in enumerate(self.scheduler.timesteps):
+        for i, t in enumerate(timesteps):
             # print(f'[SCHEDULER]\t-\tt:  {t.item()}\tt shape: {t.shape}')
             print(f'[SCHEDULER]\t-\titerazione di denoising {t.item()},\ti={i}')
             # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
@@ -184,7 +204,7 @@ class AuffusionGuidance(nn.Module):
 
             # perform guidance
             noise_pred_uncond_au, noise_pred_cond_au = noise_pred_au.chunk(2)
-            noise_pred_au = noise_pred_uncond_au + guidance_scale * (noise_pred_cond_au - noise_pred_uncond_au)
+            noise_pred_au = noise_pred_uncond_au + guidance_scale_audio * (noise_pred_cond_au - noise_pred_uncond_au)
 
             # fase stable diffusion
 
@@ -193,7 +213,7 @@ class AuffusionGuidance(nn.Module):
 
             # perform guidance
             noise_pred_uncond_sd, noise_pred_cond_sd = noise_pred_sd.chunk(2)
-            noise_pred_sd = noise_pred_uncond_sd + guidance_scale * (noise_pred_cond_sd - noise_pred_uncond_sd)  
+            noise_pred_sd = noise_pred_uncond_sd + guidance_scale_video * (noise_pred_cond_sd - noise_pred_uncond_sd)  
 
             # media 
             omega_a = heaviside(t_a*T-t.item()) 
@@ -203,7 +223,11 @@ class AuffusionGuidance(nn.Module):
             lambda_v = omega_v / (omega_a+omega_v) 
 
             noise_pred = lambda_a*noise_pred_au + lambda_v*noise_pred_sd
-            # print(f'[SCHEDULER]\t-\t(T, t, l_a, l_b) = ({T, t.item(), lambda_a, lambda_v})')
+
+            if torch.isnan(noise_pred).any():
+                raise ValueError("Il tensore rumore contiene NaN!")
+
+            #  print(f'[SCHEDULER]\t-\t(T, t, l_a, l_b) = ({T, t.item(), lambda_a, lambda_v})')
 
             # print(f'[SCHEDULER]\tnoise pred a: {noise_pred_cond_au, noise_pred_uncond_au}')
             # print(f'[SCHEDULER]\tnoise pred v: {noise_pred_cond_sd, noise_pred_uncond_sd}')
@@ -291,8 +315,8 @@ class AuffusionGuidance(nn.Module):
     def prompt_to_spec(self, prompt_au, prompt_sd, 
                        negative_prompt_au='',negative_prompt_sd = '',
                        height=512, width=512, 
-                       num_inference_steps=50, guidance_scale=7.5, 
-                       latents=None, device=None, generator=None):
+                       num_inference_steps=50, guidance_scale_audio=7.5, guidance_scale_video=7.5, 
+                       latents=None, device=None, generator=None, input_spectrogram=None, strength=0.8):
         
         if isinstance(prompt_au, str) and isinstance(prompt_sd, str):
             prompt_au = [prompt_au]
@@ -302,22 +326,103 @@ class AuffusionGuidance(nn.Module):
             negative_prompt_au = [negative_prompt_au]
             negative_prompt_sd = [negative_prompt_sd]
 
-        # Prompt auffusion -> text embeds auffusion
-        pos_embeds_au = self.get_text_embeds(prompt_au, device) # [1, 77, 768]
-        neg_embeds_au = self.get_text_embeds(negative_prompt_au, device)
-        text_embeds_au = torch.cat([neg_embeds_au, pos_embeds_au], dim=0) # [2, 77, 768]
+            # Prompt auffusion -> text embeds auffusion
+            pos_embeds_au = self.get_text_embeds(prompt_au, device) # [1, 77, 768]
+            neg_embeds_au = self.get_text_embeds(negative_prompt_au, device)
+            text_embeds_au = torch.cat([neg_embeds_au, pos_embeds_au], dim=0) # [2, 77, 768]
 
-        # Prompt stable diffusion -> text embeds stable diffusion
-        pos_embeds_sd = self.get_text_embeds(prompt_sd, device) # [1, 77, 768]
-        neg_embeds_sd = self.get_text_embeds(negative_prompt_sd, device)
-        text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
+            # Prompt stable diffusion -> text embeds stable diffusion
+            pos_embeds_sd = self.get_text_embeds(prompt_sd, device) # [1, 77, 768]
+            neg_embeds_sd = self.get_text_embeds(negative_prompt_sd, device)
+            text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
 
-        # Text embeds -> img latents
-        latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, width=width, latents=latents, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale, generator=generator) # [1, 4, 64, 64]
+        if input_spectrogram is None:
+            # Text embeds -> img latents
+            try:
+                latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
+                                        width=width, latents=latents, num_inference_steps=num_inference_steps, 
+                                        guidance_scale_audio=guidance_scale_audio, 
+                                        guidance_scale_video=guidance_scale_video, generator=generator, strength=0.0) # [1, 4, 64, 64]
+            except ValueError as e:
+                raise e
+            # Img latents -> imgs
+        
+        else:
+            # input spectrogram è un immagine (256,1024). Convertiamola a tensore 
+            # rgb_spect = gray2rgb(input_spectrogram.astype(np.uint8))  # assicura [0,255]
 
-        # Img latents -> imgs
+            rgb_spect = normalize_img(input_spectrogram)  # shape (H, W, 3), dtype float32
+            spect_tensor = torch.from_numpy(rgb_spect).permute(2, 0, 1).unsqueeze(0)  # shape (1, 3, H, W)
+            spect_tensor = spect_tensor.to(dtype=self.unet.dtype, device=self.unet.device)
+
+            # rgb_spect = np.float16(normalize_img(input_spectrogram)) / np.max(input_spectrogram)
+            # spect_tensor = torch.from_numpy(rgb_spect).permute(2,0,1).to(dtype=self.unet.dtype) 
+            # spect_tensor = spect_tensor.squeeze(0).to(self.unet.device)
+
+            # Encode (assumendo sia un VAE)
+            latent_1 = self.encode_imgs(spect_tensor)
+            latent_1 = latent_1.to(self.unet.device, dtype=self.unet.dtype)
+            torch.cuda.empty_cache()
+            gc.collect()
+            try:
+                latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
+                                        width=width, num_inference_steps=num_inference_steps, 
+                                        guidance_scale_audio=guidance_scale_audio, 
+                                        guidance_scale_video=guidance_scale_video, generator=generator, latents=latent_1,strength=strength)
+            except ValueError as e:
+                raise RuntimeError('Errore nella generazione del tensore latente')
+            
+
+        torch.cuda.empty_cache()
+        gc.collect()
         imgs = self.decode_latents(latents) # [1, 3, 512, 512]
         return imgs
+    
+    # def prompt_image_to_spect(self, prompt_au, prompt_sd, 
+    #                    negative_prompt_au='',negative_prompt_sd = '',
+    #                    height=512, width=512, 
+    #                    num_inference_steps=50, guidance_scale=7.5, 
+    #                    latents=None, device=None, generator=None, input_spectrogram=None):
+        
+    #     if isinstance(prompt_au, str) and isinstance(prompt_sd, str):
+    #         prompt_au = [prompt_au]
+    #         prompt_sd = [prompt_sd]
+
+    #     if isinstance(negative_prompt_au, str) and isinstance(negative_prompt_sd, str):
+    #         negative_prompt_au = [negative_prompt_au]
+    #         negative_prompt_sd = [negative_prompt_sd]
+
+    #     if input_spectrogram is None:
+    #         raise ValueError('Errore! chiama prompt to to spec invece di questa')
+        
+    #     spect_tensor = torch.from_numpy(input_spectrogram).float() / 255.0
+
+    #     spect_tensor = spect_tensor.permute(2, 0, 1).unsqueeze(0)
+    #     latent_1 = self.encode_imgs(spect_tensor)
+
+    #     torch.cuda.empty_cache()
+    #     gc.collect()
+        
+
+    #     # Prompt auffusion -> text embeds auffusion
+    #     pos_embeds_au = self.get_text_embeds(prompt_au, device) # [1, 77, 768]
+    #     neg_embeds_au = self.get_text_embeds(negative_prompt_au, device)
+    #     text_embeds_au = torch.cat([neg_embeds_au, pos_embeds_au], dim=0) # [2, 77, 768]
+
+    #     # Prompt stable diffusion -> text embeds stable diffusion
+    #     pos_embeds_sd = self.get_text_embeds(prompt_sd, device) # [1, 77, 768]
+    #     neg_embeds_sd = self.get_text_embeds(negative_prompt_sd, device)
+    #     text_embeds_sd = torch.cat([neg_embeds_sd, pos_embeds_sd], dim=0) # [2, 77, 768]
+
+    #     # Text embeds -> img latents
+    #     latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, width=width, latents=latent_1, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale, generator=generator) # [1, 4, 64, 64]
+
+    #     torch.cuda.empty_cache()
+    #     gc.collect()
+
+    #     # Img latents -> imgs
+    #     imgs = self.decode_latents(latents) # [1, 3, 512, 512]
+    #     return imgs
 
 if __name__ == '__main__':
     import numpy as np
