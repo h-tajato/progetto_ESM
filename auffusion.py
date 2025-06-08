@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from skimage.color import gray2rgb
+# from skimage.color import gray2rgb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -45,6 +45,7 @@ class AuffusionGuidance(nn.Module):
         # import modello auffusion
         self.vae, self.tokenizer, self.text_encoder, self.unet = self.create_model_from_pipe(repo_id_auffusion, self.precision_t)
         self.scheduler = DDIMScheduler.from_pretrained(repo_id_auffusion, subfolder="scheduler", torch_dtype=self.precision_t)
+
         self.vocoder = Generator.from_pretrained(repo_id_auffusion, subfolder="vocoder").to(dtype=self.precision_t)
 
         self.register_buffer('alphas_cumprod', self.scheduler.alphas_cumprod)
@@ -163,16 +164,19 @@ class AuffusionGuidance(nn.Module):
     def produce_latents(self, text_embeddings_au, text_embeddings_sd, 
                         height=512, width=512, num_inference_steps=50, 
                         guidance_scale_audio=7.5,guidance_scale_video=7.5, 
-                        latents=None, generator=None):
+                        latents=None, generator=None, strength=0.8):
 
         # definizione costanti utili per la media pesata iterativa
         T = 991
+        # scheduler_1 = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True, steps_offset=1)
+        # scheduler_1.set_timesteps(num_inference_steps=1000)
+
         if latents is None:
             t_a, t_v = 1.0, 0.9
             latents = torch.randn((text_embeddings_au.shape[0] // 2, self.unet.config.in_channels, height // 8, width // 8), generator=generator, dtype=self.unet.dtype).to(text_embeddings_au.device)
         else:
             t_a, t_v = 0.5, 1.0
-            noise_par = 0.9
+            # noise_par = 0.9
             # Genera rumore come nel ramo if
             # noise = torch.randn(latents.shape, generator=generator, dtype=self.unet.dtype).to(latents.device)
 
@@ -182,9 +186,12 @@ class AuffusionGuidance(nn.Module):
                                                 torch.tensor([T], dtype=torch.long).to(text_embeddings_au.device))
             if torch.isnan(latents).any():
                 raise ValueError("Il tensore contiene NaN!")
-        self.scheduler.set_timesteps(num_inference_steps)
 
-        for i, t in enumerate(self.scheduler.timesteps):
+        self.scheduler.set_timesteps(num_inference_steps)
+        t_start = int(num_inference_steps*(1-strength))
+        timesteps = self.scheduler.timesteps[t_start:]
+
+        for i, t in enumerate(timesteps):
             # print(f'[SCHEDULER]\t-\tt:  {t.item()}\tt shape: {t.shape}')
             print(f'[SCHEDULER]\t-\titerazione di denoising {t.item()},\ti={i}')
             # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
@@ -309,7 +316,7 @@ class AuffusionGuidance(nn.Module):
                        negative_prompt_au='',negative_prompt_sd = '',
                        height=512, width=512, 
                        num_inference_steps=50, guidance_scale_audio=7.5, guidance_scale_video=7.5, 
-                       latents=None, device=None, generator=None, input_spectrogram=None):
+                       latents=None, device=None, generator=None, input_spectrogram=None, strength=0.8):
         
         if isinstance(prompt_au, str) and isinstance(prompt_sd, str):
             prompt_au = [prompt_au]
@@ -335,7 +342,7 @@ class AuffusionGuidance(nn.Module):
                 latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
                                         width=width, latents=latents, num_inference_steps=num_inference_steps, 
                                         guidance_scale_audio=guidance_scale_audio, 
-                                        guidance_scale_video=guidance_scale_video, generator=generator) # [1, 4, 64, 64]
+                                        guidance_scale_video=guidance_scale_video, generator=generator, strength=0.0) # [1, 4, 64, 64]
             except ValueError as e:
                 raise e
             # Img latents -> imgs
@@ -343,7 +350,7 @@ class AuffusionGuidance(nn.Module):
         else:
             # input spectrogram è un immagine (256,1024). Convertiamola a tensore 
             # rgb_spect = gray2rgb(input_spectrogram.astype(np.uint8))  # assicura [0,255]
-            rgb_spect *= 0.7
+
             rgb_spect = normalize_img(input_spectrogram)  # shape (H, W, 3), dtype float32
             spect_tensor = torch.from_numpy(rgb_spect).permute(2, 0, 1).unsqueeze(0)  # shape (1, 3, H, W)
             spect_tensor = spect_tensor.to(dtype=self.unet.dtype, device=self.unet.device)
@@ -361,7 +368,7 @@ class AuffusionGuidance(nn.Module):
                 latents = self.produce_latents(text_embeds_au, text_embeds_sd, height=height, 
                                         width=width, num_inference_steps=num_inference_steps, 
                                         guidance_scale_audio=guidance_scale_audio, 
-                                        guidance_scale_video=guidance_scale_video, generator=generator, latents=latent_1)
+                                        guidance_scale_video=guidance_scale_video, generator=generator, latents=latent_1,strength=strength)
             except ValueError as e:
                 raise RuntimeError('Errore nella generazione del tensore latente')
             
