@@ -62,76 +62,10 @@ def save_spectrogram(path:str, spect, clip=False)->bool:
     return True
 
 if __name__ == '__main__':
-    path = '.\\input_spectrograms\\prova.png'
-    im = spectrify('.\\guida\\suono_monete.mp3')
+    path = '.\\input_spectrograms\\elephant\\elephant.png'
+    im, shape= spectrify("C:\\Users\\Flexo Rodriguez\\Desktop\\progetto_ESM\\input_spectrograms\\elephant\\elephant.mp3")
     res = save_spectrogram(path, im)
     if (res):
-        print('salvateggio eseguito con successo')
+        print(f'salvateggio eseguito con successo con shape {shape}')
     else: 
         raise RuntimeError('Errore sconosciuto')
-
-# # waveform, sample_rate = torchaudio.load("Suoni/coin-sound-79325.mp3")
-# fs, segnale = None, None  # inizializzo per chiarezza
-
-# fs = sample_rate
-# # Se stereo, converto in mono prendendo la media dei canali
-# segnale = waveform.mean(dim=0).numpy()
-
-# # Normalizza
-# if segnale.dtype == np.int16:
-#     segnale = segnale / 32768
-
-# # Parametri spettrogramma
-# win_size = int(0.025 * fs)  # 25 ms
-# hop_size = int(0.010 * fs)  # 10 ms
-# num_frames = 1 + (len(segnale) - win_size) // hop_size
-
-# # Finestra di Hamming per ridurre leakage
-# finestra = np.hamming(win_size)
-
-# # Costruiamo matrice spettrogramma (righe: frequenze, colonne: tempo)
-# spettrogramma = []
-
-# for i in range(num_frames):
-#     start = i * hop_size
-#     end = start + win_size
-#     segmento = segnale[start:end]
-
-#     if len(segmento) < win_size:
-#         segmento = np.pad(segmento, (0, win_size - len(segmento)))
-
-#     # Applica finestra e FFT
-#     # segmento = np.mean(segmento, axis=1)
-#     segment_windowed = segmento * finestra
-#     fft_vals = np.fft.fft(segment_windowed)
-#     fft_magn = np.abs(fft_vals[:win_size // 2])  # solo parte positiva
-
-#     spettrogramma.append(fft_magn)
-
-# # Converti in array (colonne: frame nel tempo, righe: frequenze)
-# spettrogramma = np.array(spettrogramma).T  # shape: [frequenze, tempo]
-
-# # Asse delle frequenze e del tempo
-# frequenze = np.linspace(0, fs / 2, win_size // 2)
-# tempi = np.arange(num_frames) * hop_size / fs
-
-# # Crea asse temporale
-# durata = len(segnale) / fs
-# t = np.linspace(0, durata, len(segnale), endpoint=False)
-
-# # Plot della sinusoide nel dominio del tempo
-# plt.figure()
-# plt.plot(t, segnale)
-# plt.xlabel("Tempo [s]")
-# plt.ylabel("Ampiezza [db]")
-# plt.legend()
-
-# # Visualizza
-# plt.figure(figsize=(10, 4))
-# plt.pcolormesh(tempi, frequenze, 20 * np.log10(spettrogramma + 1e-10), shading='gouraud', cmap='gray')
-# plt.ylabel('Frequenza [Hz]')
-# plt.xlabel('Tempo [s]')
-# plt.title('Spettrogramma')
-# plt.colorbar(label='Ampiezza [dB]')
-# plt.tight_layout()
-# plt.show()

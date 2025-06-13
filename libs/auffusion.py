@@ -105,7 +105,7 @@ class AuffusionGuidance(nn.Module):
         # Gestione del caso guidato e non guidato
         if latents is None:
             # Parametri per comprendere l'incidenza, uno solo tra i due valori (indipendenza da chi), può assumere valori nell'intervallo [0,1]
-            t_a, t_v = 1.0, 0.9
+            t_a, t_v = 1.0, 0.6
             
             # Generazione, nel caso non guidato, del rumore gaussiano a media 0 e a varianza 1 (o identica)
             latents = torch.randn((text_embeddings_au.shape[0] // 2, self.unet.config.in_channels, height // 8, width // 8), generator=generator, dtype=self.unet.dtype).to(text_embeddings_au.device)
